@@ -45,7 +45,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t backup-doctor:ci .
+      - name: Build image (errors surface as annotations)
+        run: |
+          set -o pipefail
+          if ! docker build --progress=plain -t backup-doctor:ci . 2>&1 | tee build.log; then
+            echo "::error title=docker build failed::$(tail -n 40 build.log | tr '\n' ' ' | cut -c1-3500)"
+            exit 1
+          fi
       - run: docker run --rm backup-doctor:ci --version
       - name: Trivy scan (fail on fixable CRITICAL)
         run: |
