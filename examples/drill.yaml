@@ -1,0 +1,35 @@
+# Backup Doctor drill config.
+# Secrets are never written here: use ${ENV_VAR} and pass them as environment variables.
+
+name: shop-postgres
+
+# Where the backups live. Backup Doctor picks the NEWEST file and only ever reads it.
+#   s3://bucket/prefix/   (needs read-only S3 access, see docs/iam-read-only.json)
+#   /backups/             (a local or mounted folder)
+backup: s3://my-shop-backups/postgres/
+
+# A DISPOSABLE Postgres server to restore into. Never point this at production.
+# Each drill creates a scratch database here and drops it afterwards.
+drill_server: postgresql://drill:${DRILL_PASSWORD}@drill-postgres:5432/postgres
+
+max_backup_age_hours: 26      # fail if the newest backup is older than this
+min_backup_bytes: 1024        # fail if the backup file is (nearly) empty
+max_restore_seconds: 1800     # fail if a restore takes longer than your recovery target
+
+checks:
+  min_tables: 5
+  max_row_drop_pct: 10        # fail if any table shrank more than 10% since the last passing drill
+  tables:
+    orders:
+      min_rows: 100
+      freshness_column: created_at   # newest order = how much data you would lose (RPO)
+      max_age_hours: 26
+    customers:
+      min_rows: 10
+
+email:
+  to: [owner@example.com]
+  from: backup-doctor@example.com
+  host: smtp.example.com
+  port: 587
+  username: backup-doctor@example.com   # password comes from SMTP_PASSWORD

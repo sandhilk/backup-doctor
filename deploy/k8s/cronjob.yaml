@@ -1,0 +1,66 @@
+# Weekly backup fire drill on Kubernetes.
+# A throwaway Postgres runs as a native sidecar in the same pod, so nothing is restored
+# anywhere near production and everything disappears when the pod finishes.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-doctor
+  namespace: backup-doctor
+spec:
+  schedule: "0 6 * * 1"          # every Monday 06:00
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5      # a failed drill = a failed Job, so your existing Job alerts fire
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile: { type: RuntimeDefault }
+          initContainers:
+            # native sidecar (Kubernetes 1.29+): a disposable Postgres that lives only for this drill
+            - name: drill-postgres
+              image: postgres:17-alpine
+              restartPolicy: Always
+              env:
+                - { name: POSTGRES_USER, value: drill }
+                - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+                - name: POSTGRES_PASSWORD
+                  valueFrom: { secretKeyRef: { name: backup-doctor, key: drill-password } }
+              securityContext: { runAsUser: 70, allowPrivilegeEscalation: false }
+              readinessProbe:
+                exec: { command: ["pg_isready", "-U", "drill"] }
+                periodSeconds: 2
+              resources:
+                requests: { cpu: 250m, memory: 512Mi }
+                limits: { memory: 2Gi }
+              volumeMounts: [{ name: pgdata, mountPath: /var/lib/postgresql/data }]
+          containers:
+            - name: drill
+              image: ghcr.io/sandhilk/backup-doctor:0.1.0
+              args: ["drill", "--config", "/config/drill.yaml"]
+              envFrom: [{ secretRef: { name: backup-doctor } }]   # DRILL_PASSWORD, SMTP_PASSWORD, AWS_* (read-only)
+              securityContext:
+                runAsUser: 10001
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              resources:
+                requests: { cpu: 100m, memory: 128Mi }
+                limits: { memory: 512Mi }
+              volumeMounts:
+                - { name: config, mountPath: /config, readOnly: true }
+                - { name: results, mountPath: /results }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - name: config
+              configMap: { name: backup-doctor }
+            - name: pgdata
+              emptyDir: { sizeLimit: 20Gi }
+            - name: results
+              emptyDir: {}
+            - name: tmp
+              emptyDir: { sizeLimit: 20Gi }
